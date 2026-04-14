@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "learning": {
+      "command": "python",
+      "args": [
+        "C:/workspace/claude-hybrid-learning/.worktrees/hermes-learning/scripts/hermes_learning/mcp/server.py"
+      ]
+    }
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/workspace/claude-hybrid-learning/.worktrees/hermes-learning/scripts/hermes_learning/hooks/stop-hook.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FORCE_EXTRACTION=true C:/workspace/claude-hybrid-learning/.worktrees/hermes-learning/scripts/hermes_learning/hooks/stop-hook.sh"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:/workspace/claude-hybrid-learning/.worktrees/hermes-learning/scripts/hermes_learning/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
