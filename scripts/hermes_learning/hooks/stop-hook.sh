@@ -5,7 +5,8 @@ if [[ "${LEARNING_REVIEW_CHILD:-}" == "1" ]]; then
   exit 0
 fi
 
-if [[ -z "${CLAUDE_TRANSCRIPT_PATH:-}" || ! -f "${CLAUDE_TRANSCRIPT_PATH}" ]]; then
+transcript="${CLAUDE_TRANSCRIPT_PATH:-}"
+if [[ -z "$transcript" || ! -f "$transcript" ]]; then
   exit 0
 fi
 
