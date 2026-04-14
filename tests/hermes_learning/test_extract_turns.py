@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
@@ -20,7 +21,7 @@ def test_extract_last_two_turns(tmp_path: Path):
 
     out = subprocess.check_output([
         "python", "scripts/hermes_learning/extract_turns.py", str(transcript), "2"
-    ], text=True, cwd="c:/workspace/claude-hybrid-learning/.worktrees/hermes-learning")
+    ], text=True, cwd=str(REPO_ROOT))
 
     assert "User: u1" in out
     assert "Assistant: a1" in out
@@ -33,5 +34,5 @@ def test_missing_file_returns_empty(tmp_path: Path):
     missing = tmp_path / "missing.jsonl"
     out = subprocess.check_output([
         "python", "scripts/hermes_learning/extract_turns.py", str(missing), "3"
-    ], text=True, cwd="c:/workspace/claude-hybrid-learning/.worktrees/hermes-learning")
+    ], text=True, cwd=str(REPO_ROOT))
     assert out.strip() == ""
