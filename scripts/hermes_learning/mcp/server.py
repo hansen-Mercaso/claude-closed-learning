@@ -14,8 +14,14 @@ def memory_read() -> dict:
     return {"content": p.read_text(encoding="utf-8")}
 
 
+_buffer: "CandidateBuffer | None" = None
+
+
 def _global_buffer() -> CandidateBuffer:
-    return CandidateBuffer(Path.home() / ".claude" / "learning" / "global-candidates.json")
+    global _buffer
+    if _buffer is None:
+        _buffer = CandidateBuffer(Path.home() / ".claude" / "learning" / "global-candidates.json")
+    return _buffer
 
 
 def buffer_add(cand: dict) -> dict:

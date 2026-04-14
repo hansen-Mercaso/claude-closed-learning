@@ -2,5 +2,5 @@
 from __future__ import annotations
 
 
-def write_memory(*args, **kwargs) -> dict:
+def write_memory(content: str) -> dict:
     return {"ok": True}

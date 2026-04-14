@@ -2,5 +2,5 @@
 from __future__ import annotations
 
 
-def write_skill(*args, **kwargs) -> dict:
+def write_skill(content: str) -> dict:
     return {"ok": True}
