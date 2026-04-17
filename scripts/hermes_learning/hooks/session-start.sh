@@ -10,7 +10,30 @@ if [[ ! -f "$state_file" || ! -f "$cand_file" ]]; then
 fi
 
 export CAND_FILE="$cand_file"
-pending_count="$({ python -c 'import json, os; from pathlib import Path; data = json.loads(Path(os.environ["CAND_FILE"]).read_text(encoding="utf-8") or "[]"); print(sum(1 for item in data if item.get("status") == "pending"))'; } )"
+pending_count="$(python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+raw = Path(os.environ["CAND_FILE"]).read_text(encoding="utf-8")
+try:
+    payload = json.loads(raw or "[]")
+except json.JSONDecodeError:
+    payload = []
+
+if isinstance(payload, list):
+    rows = payload
+elif isinstance(payload, dict):
+    rows = payload.get("rows")
+else:
+    rows = []
+
+if not isinstance(rows, list):
+    rows = []
+
+print(sum(1 for item in rows if isinstance(item, dict) and item.get("status") == "pending"))
+PY
+)"
 
 if [[ "$pending_count" == "0" ]]; then
   exit 0

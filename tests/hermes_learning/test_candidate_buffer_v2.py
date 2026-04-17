@@ -237,3 +237,31 @@ def test_expire_pending_marks_old_rows_expired(tmp_path: Path):
     assert statuses["old-pending"] == "expired"
     assert statuses["fresh-pending"] == "pending"
     assert statuses["old-approved"] == "approved"
+
+
+def test_list_pending_negative_cap_raises_value_error(tmp_path: Path):
+    b = CandidateBuffer(tmp_path / "candidates.json")
+
+    try:
+        b.list_pending(cap=-1)
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert str(exc) == "cap must be >= 0"
+
+
+def test_list_pending_zero_cap_returns_empty_list(tmp_path: Path):
+    b = CandidateBuffer(tmp_path / "candidates.json")
+    b.add({"dedupe_key": "k1", "confidence": "high", "content": "x", "status": "pending"})
+
+    assert b.list_pending(cap=0) == []
+
+
+def test_expire_pending_non_positive_ttl_raises_value_error(tmp_path: Path):
+    b = CandidateBuffer(tmp_path / "candidates.json")
+
+    for ttl in (0, -1):
+        try:
+            b.expire_pending(ttl_days=ttl)
+            assert False, "expected ValueError"
+        except ValueError as exc:
+            assert str(exc) == "ttl_days must be > 0"

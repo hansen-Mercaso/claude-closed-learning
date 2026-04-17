@@ -58,3 +58,33 @@ def test_session_start_emits_additional_context(tmp_path: Path):
     payload = json.loads(cp.stdout)
     assert "hookSpecificOutput" in payload
     assert "additionalContext" in payload["hookSpecificOutput"]
+
+
+def test_session_start_emits_additional_context_for_v2_candidates_payload(tmp_path: Path):
+    learning_dir = tmp_path / "learning"
+    learning_dir.mkdir()
+
+    (learning_dir / "session-state.json").write_text("{}\n", encoding="utf-8")
+    (learning_dir / "candidates.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "candidates",
+                "rows": [
+                    {
+                        "title": "Review approval",
+                        "content": "Pending approval item",
+                        "status": "pending",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cp = _run_session_start({"PROJECT_LEARNING_DIR": str(learning_dir)})
+
+    assert cp.returncode == 0
+    payload = json.loads(cp.stdout)
+    assert "hookSpecificOutput" in payload
+    assert "additionalContext" in payload["hookSpecificOutput"]

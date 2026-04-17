@@ -34,7 +34,11 @@ class CandidateBuffer:
         if not self.path.exists():
             return migrate_candidates_payload([])
 
-        txt = self.path.read_text(encoding="utf-8").strip()
+        try:
+            txt = self.path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            return migrate_candidates_payload([])
+
         if not txt:
             return migrate_candidates_payload([])
 
@@ -122,6 +126,11 @@ class CandidateBuffer:
         return {"action": "not_found", "candidate_id": candidate_id}
 
     def list_pending(self, cap: int = 8, include_low: bool = False) -> list[dict]:
+        if cap < 0:
+            raise ValueError("cap must be >= 0")
+        if cap == 0:
+            return []
+
         rows = [r for r in self.read_all() if r.get("status") == "pending"]
         if not include_low:
             rows = [r for r in rows if CONF_RANK.get(r.get("confidence", "low"), 0) > 0]
@@ -136,6 +145,9 @@ class CandidateBuffer:
         return rows[:cap]
 
     def expire_pending(self, ttl_days: int) -> dict:
+        if ttl_days <= 0:
+            raise ValueError("ttl_days must be > 0")
+
         rows = self.read_all()
         cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
         now = self._now()
