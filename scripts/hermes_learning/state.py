@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 
 SCHEMA_VERSION = 2
@@ -31,10 +33,19 @@ def storage_root() -> Path:
 
 
 def normalize_project_id(workspace_path: str) -> str:
-    normalized = workspace_path.replace("\\", "/").strip().rstrip("/").lower()
-    normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
-    normalized = re.sub(r"-+", "-", normalized).strip("-")
-    return normalized or "unknown-project"
+    normalized_workspace = unicodedata.normalize("NFKC", workspace_path).replace("\\", "/").strip()
+    normalized_workspace = re.sub(r"/+", "/", normalized_workspace)
+    if normalized_workspace != "/":
+        normalized_workspace = normalized_workspace.rstrip("/")
+
+    slug_source = unicodedata.normalize("NFKD", normalized_workspace.lower())
+    ascii_slug = slug_source.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_slug)
+    slug = re.sub(r"-+", "-", slug).strip("-")
+
+    short_hash = hashlib.sha256(normalized_workspace.encode("utf-8")).hexdigest()[:10]
+    readable_slug = slug or "unknown-project"
+    return f"{readable_slug}-{short_hash}"
 
 
 def learning_paths(project_id: str) -> dict[str, Path]:
@@ -77,5 +88,5 @@ def read_json(path: Path, default: object) -> object:
 
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         return default
