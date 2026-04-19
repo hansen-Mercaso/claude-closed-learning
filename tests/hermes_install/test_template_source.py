@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -43,56 +42,46 @@ def test_latest_tag_selection_ignores_prerelease_suffixes():
     assert template_source.pick_latest_stable_tag(tags) == "v1.0.0"
 
 
-def test_list_remote_tags_reads_names_from_github_payload(monkeypatch):
-    class _Resp:
-        def __enter__(self):
-            return self
+def test_list_remote_tags_uses_git_ls_remote(monkeypatch):
+    def _fake_run(cmd, capture_output, text, check):
+        assert cmd[:3] == ["git", "ls-remote", "--tags"]
+        assert template_source.TEMPLATE_REPO in cmd
 
-        def __exit__(self, exc_type, exc, tb):
-            return False
+        class _Res:
+            returncode = 0
+            stdout = """\
+111\trefs/tags/v1.2.0
+222\trefs/tags/v1.2.0^{}
+333\trefs/tags/v1.1.9
+"""
+            stderr = ""
 
-        def read(self) -> bytes:
-            payload = [
-                {"name": "v1.2.0"},
-                {"name": " v1.1.9 "},
-                {"not_name": "ignored"},
-                "ignored",
-            ]
-            return json.dumps(payload).encode("utf-8")
+        return _Res()
 
-    monkeypatch.setattr(template_source.urllib.request, "urlopen", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr(template_source.subprocess, "run", _fake_run)
 
-    tags = template_source.list_remote_tags("https://example.invalid/tags")
+    tags = template_source.list_remote_tags()
 
-    assert tags == ["v1.2.0", "v1.1.9", ""]
+    assert tags == ["v1.2.0", "v1.1.9"]
 
 
-def test_resolve_template_source_fetches_latest_stable_archive(tmp_path: Path, monkeypatch):
-    template_source_root = tmp_path / "repo-v1.2.0" / "scripts" / "hermes_learning"
-    template_source_root.mkdir(parents=True)
-    (template_source_root / "migrate.py").write_text("# ok\n", encoding="utf-8")
+def test_resolve_template_source_clones_latest_stable_tag(tmp_path: Path, monkeypatch):
+    clone_root = tmp_path / "clone"
+    hermes_root = clone_root / "scripts" / "hermes_learning"
+    hermes_root.mkdir(parents=True)
+    (hermes_root / "migrate.py").write_text("# ok\n", encoding="utf-8")
 
-    archive_source_dir = tmp_path / "archive-source"
-    archive_source_dir.mkdir()
-    shutil.make_archive(
-        str(archive_source_dir / "v1.2.0"),
-        "zip",
-        root_dir=tmp_path,
-        base_dir="repo-v1.2.0",
-    )
-    source_archive = archive_source_dir / "v1.2.0.zip"
+    monkeypatch.setattr(template_source, "list_remote_tags", lambda: ["v1.2.0-rc.1", "v1.2.0"])
 
-    monkeypatch.setattr(template_source, "list_remote_tags", lambda repo_api_tags_url=None: ["v1.2.0-rc.1", "v1.2.0"])
-    monkeypatch.setattr(template_source.tempfile, "mkdtemp", lambda prefix: str(tmp_path / "work"))
+    def _fake_clone(repo: str, tag: str, dst: Path):
+        assert repo == template_source.TEMPLATE_REPO
+        assert tag == "v1.2.0"
+        assert dst == clone_root
 
-    def _fake_urlretrieve(url: str, filename: str | Path):
-        assert url == f"{template_source.TEMPLATE_REPO}/archive/refs/tags/v1.2.0.zip"
-        shutil.copyfile(source_archive, filename)
-        return str(filename), None
-
-    monkeypatch.setattr(template_source.urllib.request, "urlretrieve", _fake_urlretrieve)
+    monkeypatch.setattr(template_source, "_clone_tag_snapshot", _fake_clone)
+    monkeypatch.setattr(template_source.tempfile, "mkdtemp", lambda prefix: str(clone_root))
 
     resolved = template_source.resolve_template_source()
 
-    assert resolved == tmp_path / "work" / "extract" / "repo-v1.2.0" / "scripts" / "hermes_learning"
+    assert resolved == clone_root / "scripts" / "hermes_learning"
     assert (resolved / "migrate.py").exists()

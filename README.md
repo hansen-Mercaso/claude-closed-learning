@@ -4,10 +4,22 @@ A pipx-installable installer for Hermes Learning.
 
 ## Install
 
-Use the latest stable tag:
+Install installer itself (SSH, track default branch):
 
 ```bash
-pipx install "git+https://github.com/hansen-Mercaso/claude-closed-learning.git@v0.1.0"
+pipx install "git+ssh://git@github.com/hansen-Mercaso/claude-closed-learning.git"
+```
+
+On Windows if `pipx` is not in PATH yet:
+
+```powershell
+py -3 -m pipx install "git+ssh://git@github.com/hansen-Mercaso/claude-closed-learning.git"
+```
+
+## Upgrade installer
+
+```bash
+pipx upgrade hermes-install
 ```
 
 ## Usage

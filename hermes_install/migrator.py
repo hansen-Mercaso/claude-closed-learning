@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import copy
+import json
+import shutil
+import stat
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
-
-from scripts.hermes_learning import migrate
 
 
 def ensure_git_repo(target_repo: Path) -> None:
@@ -27,15 +30,206 @@ def ensure_git_repo(target_repo: Path) -> None:
         raise ValueError(f"failed to initialize git repository: {init.stderr.strip()}")
 
 
+def _collect_source_files(source_root: Path) -> list[Path]:
+    files: list[Path] = []
+    for path in source_root.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(source_root)
+        if "__pycache__" in rel.parts or rel.suffix.lower() == ".pyc":
+            continue
+        files.append(rel)
+    files.sort(key=lambda p: p.as_posix())
+    return files
+
+
+def _ensure_hook_block(settings: dict, event: str) -> list[dict]:
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        settings["hooks"] = {}
+        hooks = settings["hooks"]
+
+    blocks = hooks.setdefault(event, [])
+    if not isinstance(blocks, list):
+        hooks[event] = []
+        blocks = hooks[event]
+    return blocks
+
+
+def _inject_command_hook(blocks: list[dict], command: str, matcher: str | None = None) -> None:
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        block_matcher = block.get("matcher")
+        if matcher is not None:
+            if block_matcher != matcher:
+                continue
+        elif block_matcher is not None:
+            continue
+
+        hooks = block.get("hooks")
+        if not isinstance(hooks, list):
+            continue
+
+        for hook in hooks:
+            if isinstance(hook, dict) and hook.get("type") == "command" and hook.get("command") == command:
+                return
+
+    entry: dict[str, object] = {"hooks": [{"type": "command", "command": command}]}
+    if matcher is not None:
+        entry["matcher"] = matcher
+    blocks.append(entry)
+
+
+def _merge_learning_settings(existing: dict) -> dict:
+    out = copy.deepcopy(existing) if isinstance(existing, dict) else {}
+
+    mcp_servers = out.setdefault("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        out["mcpServers"] = {}
+        mcp_servers = out["mcpServers"]
+
+    mcp_servers["learning"] = {
+        "command": "python",
+        "args": ["scripts/hermes_learning/mcp/server.py"],
+    }
+
+    stop_blocks = _ensure_hook_block(out, "Stop")
+    _inject_command_hook(stop_blocks, "scripts/hermes_learning/hooks/stop-hook.sh")
+
+    precompact_blocks = _ensure_hook_block(out, "PreCompact")
+    _inject_command_hook(
+        precompact_blocks,
+        "FORCE_EXTRACTION=true scripts/hermes_learning/hooks/stop-hook.sh",
+        matcher="manual|auto",
+    )
+
+    session_start_blocks = _ensure_hook_block(out, "SessionStart")
+    _inject_command_hook(session_start_blocks, "scripts/hermes_learning/hooks/session-start.sh")
+
+    return out
+
+
+def _build_migration_plan(*, source_root: Path, target_repo: Path) -> dict:
+    rel_files = _collect_source_files(source_root)
+    file_changes: list[dict] = []
+
+    for rel in rel_files:
+        src = source_root / rel
+        dst = target_repo / "scripts" / "hermes_learning" / rel
+
+        if not dst.exists():
+            file_changes.append({"type": "add", "path": dst.as_posix(), "rel": rel.as_posix()})
+            continue
+
+        if not dst.is_file():
+            file_changes.append({"type": "conflict", "path": dst.as_posix(), "rel": rel.as_posix()})
+            continue
+
+        if src.read_bytes() == dst.read_bytes():
+            file_changes.append({"type": "skip", "path": dst.as_posix(), "rel": rel.as_posix()})
+            continue
+
+        file_changes.append({"type": "conflict", "path": dst.as_posix(), "rel": rel.as_posix()})
+
+    settings_path = target_repo / ".claude" / "settings.json"
+    existing: dict = {}
+    if settings_path.exists():
+        loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        existing = loaded if isinstance(loaded, dict) else {}
+
+    merged = _merge_learning_settings(existing)
+
+    return {
+        "file_changes": file_changes,
+        "settings_change": {
+            "existing": existing,
+            "merged": merged,
+            "changed": existing != merged,
+            "path": settings_path.as_posix(),
+        },
+    }
+
+
+def _render_preview(plan: dict) -> str:
+    lines = ["# Migration Preview", "## File Changes"]
+    for item in plan.get("file_changes", []):
+        lines.append(f"- {item['type']}: {item['rel']}")
+
+    settings_change = plan.get("settings_change", {})
+    lines.append("## Settings")
+    lines.append(f"- path: {settings_change.get('path', '')}")
+    lines.append(f"- changed: {bool(settings_change.get('changed'))}")
+    return "\n".join(lines) + "\n"
+
+
+def _backup_dir(target_repo: Path) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return target_repo / ".claude" / "migrate-backup" / stamp
+
+
+def _atomic_copy_file_with_mode(src: Path, dst: Path) -> None:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.tmp")
+    shutil.copyfile(src, tmp)
+    if shutil.os.name != "nt":
+        os_mode = src.stat().st_mode
+        tmp.chmod(stat.S_IMODE(os_mode))
+    tmp.replace(dst)
+
+
+def _apply_migration(*, plan: dict, source_root: Path, target_repo: Path, force: bool) -> dict:
+    conflicts = [item for item in plan.get("file_changes", []) if item.get("type") == "conflict"]
+    if conflicts and not force:
+        return {"ok": False, "error_code": "conflict_detected", "conflicts": conflicts}
+
+    has_file_changes = any(item.get("type") != "skip" for item in plan.get("file_changes", []))
+    settings_change = plan.get("settings_change", {})
+    has_settings_change = bool(settings_change.get("changed"))
+
+    backup_root: Path | None = None
+    if has_file_changes or has_settings_change:
+        backup_root = _backup_dir(target_repo)
+        backup_root.mkdir(parents=True, exist_ok=True)
+
+    for item in plan.get("file_changes", []):
+        if item.get("type") == "skip":
+            continue
+
+        rel = Path(item["rel"])
+        src = source_root / rel
+        dst = target_repo / "scripts" / "hermes_learning" / rel
+
+        if backup_root is not None and dst.exists():
+            backup_path = backup_root / "scripts" / "hermes_learning" / rel
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dst, backup_path)
+
+        _atomic_copy_file_with_mode(src, dst)
+
+    settings_path = target_repo / ".claude" / "settings.json"
+    if has_settings_change:
+        if backup_root is not None and settings_path.exists():
+            backup_settings = backup_root / ".claude" / "settings.json"
+            backup_settings.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(settings_path, backup_settings)
+
+        merged = settings_change.get("merged", {})
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return {"ok": True, "backup_dir": (backup_root.as_posix() if backup_root is not None else "")}
+
+
 def preview_install(*, source_root: Path, target_repo: Path) -> dict:
-    plan = migrate.build_migration_plan(source_root=source_root, target_repo=target_repo)
-    report = migrate.render_preview(plan)
+    plan = _build_migration_plan(source_root=source_root, target_repo=target_repo)
+    report = _render_preview(plan)
     return {"ok": True, "plan": plan, "report": report}
 
 
 def apply_install(*, source_root: Path, target_repo: Path, force: bool = False) -> dict:
-    plan = migrate.build_migration_plan(source_root=source_root, target_repo=target_repo)
-    return migrate.apply_migration(
+    plan = _build_migration_plan(source_root=source_root, target_repo=target_repo)
+    return _apply_migration(
         plan=plan,
         source_root=source_root,
         target_repo=target_repo,

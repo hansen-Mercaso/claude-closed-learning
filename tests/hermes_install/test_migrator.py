@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import importlib
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 if str(WORKTREE_ROOT) not in sys.path:
@@ -50,3 +53,26 @@ def test_ensure_git_repo_is_idempotent(tmp_path: Path):
     ensure_git_repo(target)
 
     assert (target / ".git").exists()
+
+
+def test_migrator_can_import_without_scripts_module(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delitem(sys.modules, "hermes_install.migrator", raising=False)
+
+    original_modules = sys.modules.copy()
+
+    class _Blocked(dict):
+        def __contains__(self, key):
+            if key == "scripts" or str(key).startswith("scripts."):
+                return False
+            return super().__contains__(key)
+
+        def __getitem__(self, key):
+            if key == "scripts" or str(key).startswith("scripts."):
+                raise KeyError(key)
+            return super().__getitem__(key)
+
+    blocked = _Blocked(original_modules)
+    monkeypatch.setattr(sys, "modules", blocked)
+
+    mod = importlib.import_module("hermes_install.migrator")
+    assert callable(mod.ensure_git_repo)

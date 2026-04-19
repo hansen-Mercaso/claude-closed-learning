@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
-import shutil
+import subprocess
 import tempfile
-import urllib.request
 from pathlib import Path
 
 _SEMVER = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-TEMPLATE_REPO = "https://github.com/hansen-Mercaso/claude-closed-learning"
-_DEFAULT_TAGS_API_URL = "https://api.github.com/repos/hansen-Mercaso/claude-closed-learning/tags?per_page=200"
+TEMPLATE_REPO = "git@github.com:hansen-Mercaso/claude-closed-learning.git"
 
 
 def pick_latest_stable_tag(tags: list[str]) -> str:
@@ -35,15 +32,46 @@ def extract_template_payload(extracted_root: Path) -> Path:
     return candidate
 
 
-def list_remote_tags(repo_api_tags_url: str | None = None) -> list[str]:
-    url = repo_api_tags_url or _DEFAULT_TAGS_API_URL
-    with urllib.request.urlopen(url, timeout=20) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+def list_remote_tags() -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-remote", "--tags", TEMPLATE_REPO],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"failed to list remote tags: {result.stderr.strip()}")
 
-    if not isinstance(payload, list):
-        return []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.strip().split("\t", 1)
+        if len(parts) != 2:
+            continue
+        ref = parts[1]
+        if not ref.startswith("refs/tags/"):
+            continue
+        tag = ref.removeprefix("refs/tags/")
+        if tag.endswith("^{}"):
+            tag = tag[:-3]
+        tag = tag.strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        tags.append(tag)
 
-    return [str(item.get("name", "")).strip() for item in payload if isinstance(item, dict)]
+    return tags
+
+
+def _clone_tag_snapshot(repo: str, tag: str, dst: Path) -> None:
+    result = subprocess.run(
+        ["git", "clone", "--depth", "1", "--branch", tag, repo, str(dst)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError(f"failed to clone tag snapshot: {result.stderr.strip()}")
 
 
 def resolve_template_source() -> Path:
@@ -51,17 +79,6 @@ def resolve_template_source() -> Path:
     tag = pick_latest_stable_tag(tags)
 
     temp_root = Path(tempfile.mkdtemp(prefix="hermes-template-"))
-    temp_root.mkdir(parents=True, exist_ok=True)
+    _clone_tag_snapshot(TEMPLATE_REPO, tag, temp_root)
 
-    archive_path = temp_root / f"{tag}.zip"
-    archive_url = f"{TEMPLATE_REPO}/archive/refs/tags/{tag}.zip"
-    urllib.request.urlretrieve(archive_url, archive_path)
-
-    extract_root = temp_root / "extract"
-    shutil.unpack_archive(str(archive_path), str(extract_root))
-
-    children = [path for path in extract_root.iterdir() if path.is_dir()]
-    if len(children) != 1:
-        raise ValueError("unexpected template archive structure")
-
-    return extract_template_payload(children[0])
+    return extract_template_payload(temp_root)
