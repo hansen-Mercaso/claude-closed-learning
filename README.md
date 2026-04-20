@@ -38,6 +38,21 @@ What it does:
 4. Applies installation after confirmation
 5. Auto-initializes git (`git init`) when target is not a git repo
 
+## Uninstall
+
+Run from any directory:
+
+```bash
+hermes-uninstall
+```
+
+What it does:
+
+- Removes `scripts/hermes_learning`
+- Aggressively removes learning entries from `.claude/settings.json`
+- No preview
+- No backup
+
 ## Installed into target repository
 
 - `scripts/hermes_learning/**`
