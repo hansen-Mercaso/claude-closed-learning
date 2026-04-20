@@ -282,6 +282,14 @@ def _remove_learning_command_hooks(settings: dict) -> None:
         hooks[event] = kept_blocks
 
 
+def _is_path_within(base_path: Path, candidate_path: Path) -> bool:
+    try:
+        candidate_path.relative_to(base_path)
+    except ValueError:
+        return False
+    return True
+
+
 def uninstall_from_target(target_repo: Path) -> dict:
     if not target_repo.exists() or not target_repo.is_dir():
         return {
@@ -290,11 +298,31 @@ def uninstall_from_target(target_repo: Path) -> dict:
             "message": f"target repo does not exist: {target_repo}",
         }
 
+    target_root = target_repo.resolve()
     settings_path = target_repo / ".claude" / "settings.json"
+    resolved_settings_path: Path | None = None
     settings: dict | None = None
     if settings_path.exists():
+        if settings_path.is_symlink():
+            return {
+                "ok": False,
+                "error_code": "unsafe_settings_path",
+                "message": "settings.json must not be a symlink",
+                "path": settings_path.as_posix(),
+            }
+
+        resolved_settings_path = settings_path.resolve()
+        if not _is_path_within(target_root, resolved_settings_path):
+            return {
+                "ok": False,
+                "error_code": "unsafe_settings_path",
+                "message": "resolved settings.json path must stay within target repo",
+                "path": settings_path.as_posix(),
+                "resolved_path": resolved_settings_path.as_posix(),
+            }
+
         try:
-            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+            loaded = json.loads(resolved_settings_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             return {
                 "ok": False,
@@ -319,12 +347,12 @@ def uninstall_from_target(target_repo: Path) -> dict:
         else:
             learning_dir.unlink()
 
-    if settings is not None:
+    if settings is not None and resolved_settings_path is not None:
         mcp_servers = settings.get("mcpServers")
         if isinstance(mcp_servers, dict):
             mcp_servers.pop("learning", None)
 
         _remove_learning_command_hooks(settings)
-        settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        resolved_settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     return {"ok": True}

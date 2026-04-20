@@ -161,3 +161,82 @@ def test_uninstall_is_idempotent_when_run_repeatedly(tmp_path: Path):
     updated = json.loads(settings_path.read_text(encoding="utf-8"))
     assert "learning" not in updated["mcpServers"]
     assert LEARNING_STOP not in _collect_command_hooks(updated)
+
+
+def test_uninstall_returns_error_when_target_missing(tmp_path: Path):
+    out = uninstall_from_target(tmp_path / "missing")
+
+    assert out["ok"] is False
+    assert out["error_code"] == "target_missing"
+
+
+def test_uninstall_returns_error_when_settings_json_invalid(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text("{oops", encoding="utf-8")
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "invalid_settings_json"
+
+
+def test_uninstall_returns_error_when_settings_json_is_not_object(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps(["x"]), encoding="utf-8")
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "invalid_settings_json"
+
+
+def test_uninstall_preserves_empty_hook_event_lists(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps({"hooks": {"Stop": []}, "mcpServers": {"learning": {"command": "python"}}}),
+        encoding="utf-8",
+    )
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is True
+    updated = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert updated["hooks"]["Stop"] == []
+
+
+def test_uninstall_rejects_unsafe_resolved_settings_path(tmp_path: Path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"mcpServers": {"learning": {"command": "python"}}}), encoding="utf-8")
+
+    outside = tmp_path / "outside-settings.json"
+    outside.write_text("{}", encoding="utf-8")
+
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False):
+        if self.as_posix() == settings_path.as_posix():
+            return outside
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "unsafe_settings_path"
