@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 WORKTREE_ROOT = Path(__file__).resolve().parents[2]
 if str(WORKTREE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKTREE_ROOT))
@@ -240,3 +242,68 @@ def test_uninstall_rejects_unsafe_resolved_settings_path(tmp_path: Path, monkeyp
 
     assert out["ok"] is False
     assert out["error_code"] == "unsafe_settings_path"
+
+
+def test_uninstall_handles_symlinked_learning_path(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    scripts_dir = target / "scripts"
+    scripts_dir.mkdir(parents=True)
+
+    real_learning_dir = target / "real-learning"
+    real_learning_dir.mkdir()
+    (real_learning_dir / "marker.txt").write_text("keep", encoding="utf-8")
+
+    learning_link = scripts_dir / "hermes_learning"
+    try:
+        learning_link.symlink_to(real_learning_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink not supported on this platform")
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is True
+    assert not learning_link.exists()
+    assert real_learning_dir.exists()
+    assert (real_learning_dir / "marker.txt").read_text(encoding="utf-8") == "keep"
+
+
+def test_uninstall_returns_structured_error_when_settings_write_fails(tmp_path: Path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "learning": {
+                        "command": "python",
+                        "args": ["scripts/hermes_learning/mcp/server.py"],
+                    }
+                },
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": LEARNING_STOP}]}]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_write_text = Path.write_text
+
+    def fail_settings_write(self: Path, data: str, encoding: str = "utf-8", errors=None, newline=None):
+        if self == settings_path.resolve():
+            raise OSError("disk full")
+        return original_write_text(self, data, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "write_text", fail_settings_write)
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "settings_write_failed"
+    assert out["path"] == settings_path.as_posix()
+    assert "disk full" in out["message"]

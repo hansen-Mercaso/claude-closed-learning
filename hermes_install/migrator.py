@@ -340,12 +340,22 @@ def uninstall_from_target(target_repo: Path) -> dict:
             }
         settings = loaded
 
-    learning_dir = target_repo / "scripts" / "hermes_learning"
-    if learning_dir.exists():
-        if learning_dir.is_dir():
-            shutil.rmtree(learning_dir)
-        else:
-            learning_dir.unlink()
+    learning_path = target_repo / "scripts" / "hermes_learning"
+    try:
+        if learning_path.is_symlink():
+            learning_path.unlink()
+        elif learning_path.exists():
+            if learning_path.is_dir():
+                shutil.rmtree(learning_path)
+            else:
+                learning_path.unlink()
+    except OSError as exc:
+        return {
+            "ok": False,
+            "error_code": "learning_path_delete_failed",
+            "path": learning_path.as_posix(),
+            "message": str(exc),
+        }
 
     if settings is not None and resolved_settings_path is not None:
         mcp_servers = settings.get("mcpServers")
@@ -353,6 +363,17 @@ def uninstall_from_target(target_repo: Path) -> dict:
             mcp_servers.pop("learning", None)
 
         _remove_learning_command_hooks(settings)
-        resolved_settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        try:
+            resolved_settings_path.write_text(
+                json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            return {
+                "ok": False,
+                "error_code": "settings_write_failed",
+                "path": settings_path.as_posix(),
+                "message": str(exc),
+            }
 
     return {"ok": True}
