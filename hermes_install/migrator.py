@@ -235,3 +235,96 @@ def apply_install(*, source_root: Path, target_repo: Path, force: bool = False) 
         target_repo=target_repo,
         force=force,
     )
+
+
+_LEARNING_HOOK_COMMANDS = {
+    "scripts/hermes_learning/hooks/stop-hook.sh",
+    "FORCE_EXTRACTION=true scripts/hermes_learning/hooks/stop-hook.sh",
+    "scripts/hermes_learning/hooks/session-start.sh",
+}
+
+
+def _remove_learning_command_hooks(settings: dict) -> None:
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        return
+
+    for event, blocks in list(hooks.items()):
+        if not isinstance(blocks, list):
+            continue
+
+        kept_blocks: list[object] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                kept_blocks.append(block)
+                continue
+
+            block_hooks = block.get("hooks")
+            if not isinstance(block_hooks, list):
+                kept_blocks.append(block)
+                continue
+
+            kept_hooks: list[object] = []
+            for hook in block_hooks:
+                if (
+                    isinstance(hook, dict)
+                    and hook.get("type") == "command"
+                    and hook.get("command") in _LEARNING_HOOK_COMMANDS
+                ):
+                    continue
+                kept_hooks.append(hook)
+
+            if kept_hooks:
+                updated_block = dict(block)
+                updated_block["hooks"] = kept_hooks
+                kept_blocks.append(updated_block)
+
+        hooks[event] = kept_blocks
+
+
+def uninstall_from_target(target_repo: Path) -> dict:
+    if not target_repo.exists() or not target_repo.is_dir():
+        return {
+            "ok": False,
+            "error_code": "target_missing",
+            "message": f"target repo does not exist: {target_repo}",
+        }
+
+    settings_path = target_repo / ".claude" / "settings.json"
+    settings: dict | None = None
+    if settings_path.exists():
+        try:
+            loaded = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            return {
+                "ok": False,
+                "error_code": "invalid_settings_json",
+                "message": str(exc),
+                "path": settings_path.as_posix(),
+            }
+
+        if not isinstance(loaded, dict):
+            return {
+                "ok": False,
+                "error_code": "invalid_settings_json",
+                "message": "settings.json must contain a JSON object",
+                "path": settings_path.as_posix(),
+            }
+        settings = loaded
+
+    learning_dir = target_repo / "scripts" / "hermes_learning"
+    if learning_dir.exists():
+        if learning_dir.is_dir():
+            shutil.rmtree(learning_dir)
+        else:
+            learning_dir.unlink()
+
+    if settings is not None:
+        mcp_servers = settings.get("mcpServers")
+        if isinstance(mcp_servers, dict):
+            mcp_servers.pop("learning", None)
+
+        _remove_learning_command_hooks(settings)
+        settings_path.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    return {"ok": True}
