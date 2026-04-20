@@ -307,3 +307,55 @@ def test_uninstall_returns_structured_error_when_settings_write_fails(tmp_path: 
     assert out["error_code"] == "settings_write_failed"
     assert out["path"] == settings_path.as_posix()
     assert "disk full" in out["message"]
+
+
+def test_uninstall_rejects_learning_path_resolved_outside_target(tmp_path: Path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    scripts_dir = target / "scripts"
+    scripts_dir.mkdir(parents=True)
+    learning_dir = scripts_dir / "hermes_learning"
+    learning_dir.mkdir(parents=True)
+
+    outside_learning = tmp_path / "outside-learning"
+    outside_learning.mkdir(parents=True)
+
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False):
+        if self == learning_dir:
+            return outside_learning
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "unsafe_learning_path"
+
+
+def test_uninstall_returns_structured_error_when_settings_read_fails(tmp_path: Path, monkeypatch):
+    target = tmp_path / "target"
+    target.mkdir()
+
+    settings_path = target / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True)
+    settings_path.write_text(json.dumps({"mcpServers": {"learning": {"command": "python"}}}), encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def fail_settings_read(self: Path, encoding: str | None = None, errors: str | None = None):
+        if self == settings_path.resolve():
+            raise OSError("permission denied")
+        return original_read_text(self, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", fail_settings_read)
+
+    out = uninstall_from_target(target)
+
+    assert out["ok"] is False
+    assert out["error_code"] == "settings_read_failed"
+    assert out["path"] == settings_path.as_posix()
+    assert "permission denied" in out["message"]

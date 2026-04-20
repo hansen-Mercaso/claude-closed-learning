@@ -322,7 +322,17 @@ def uninstall_from_target(target_repo: Path) -> dict:
             }
 
         try:
-            loaded = json.loads(resolved_settings_path.read_text(encoding="utf-8"))
+            raw_settings = resolved_settings_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return {
+                "ok": False,
+                "error_code": "settings_read_failed",
+                "message": str(exc),
+                "path": settings_path.as_posix(),
+            }
+
+        try:
+            loaded = json.loads(raw_settings)
         except json.JSONDecodeError as exc:
             return {
                 "ok": False,
@@ -342,6 +352,17 @@ def uninstall_from_target(target_repo: Path) -> dict:
 
     learning_path = target_repo / "scripts" / "hermes_learning"
     try:
+        if learning_path.exists() and not learning_path.is_symlink():
+            resolved_learning_path = learning_path.resolve()
+            if not _is_path_within(target_root, resolved_learning_path):
+                return {
+                    "ok": False,
+                    "error_code": "unsafe_learning_path",
+                    "message": "resolved learning path must stay within target repo",
+                    "path": learning_path.as_posix(),
+                    "resolved_path": resolved_learning_path.as_posix(),
+                }
+
         if learning_path.is_symlink():
             learning_path.unlink()
         elif learning_path.exists():
