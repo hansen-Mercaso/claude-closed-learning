@@ -12,6 +12,7 @@ dependencies = []
 
 [project.scripts]
 hermes-install = "hermes_install.cli:main"
+hermes-uninstall = "hermes_install.uninstall_cli:main"
 
 [tool.setuptools]
 packages = ["hermes_install"]
